@@ -1,0 +1,239 @@
+name: Validate Payloads
+
+on:
+  push:
+    branches: [ main, develop ]
+    paths:
+      - 'Intruder/**/*.txt'
+  pull_request:
+    branches: [ main ]
+    paths:
+      - 'Intruder/**/*.txt'
+  workflow_dispatch:
+
+jobs:
+  validate:
+    runs-on: ubuntu-latest
+
+    steps:
+    - name: Checkout repository
+      uses: actions/checkout@v4
+
+    - name: Set up Python
+      uses: actions/setup-python@v4
+      with:
+        python-version: '3.11'
+
+    - name: Check for duplicate entries
+      run: |
+        echo "🔍 Checking for duplicate entries in payload files..."
+        FOUND_DUPLICATES=0
+
+        for file in Intruder/*.txt; do
+          echo "Checking $file..."
+          DUPLICATES=$(sort "$file" | uniq -d)
+          if [ ! -z "$DUPLICATES" ]; then
+            echo "❌ Found duplicates in $file:"
+            echo "$DUPLICATES"
+            FOUND_DUPLICATES=1
+          else
+            echo "✅ No duplicates in $file"
+          fi
+        done
+
+        if [ $FOUND_DUPLICATES -eq 1 ]; then
+          echo "::error::Duplicate entries found in one or more files"
+          exit 1
+        fi
+
+    - name: Check for trailing spaces
+      run: |
+        echo "🔍 Checking for trailing spaces..."
+        FOUND_TRAILING=0
+
+        for file in Intruder/*.txt; do
+          echo "Checking $file..."
+          if grep -n ' $' "$file"; then
+            echo "❌ Found trailing spaces in $file"
+            FOUND_TRAILING=1
+          else
+            echo "✅ No trailing spaces in $file"
+          fi
+        done
+
+        if [ $FOUND_TRAILING -eq 1 ]; then
+          echo "::error::Trailing spaces found in one or more files"
+          exit 1
+        fi
+
+    - name: Check for empty lines
+      run: |
+        echo "🔍 Checking for empty lines..."
+        FOUND_EMPTY=0
+
+        for file in Intruder/*.txt; do
+          echo "Checking $file..."
+          if grep -n '^$' "$file"; then
+            echo "⚠️ Found empty lines in $file"
+            FOUND_EMPTY=1
+          else
+            echo "✅ No empty lines in $file"
+          fi
+        done
+
+        if [ $FOUND_EMPTY -eq 1 ]; then
+          echo "::warning::Empty lines found in one or more files"
+        fi
+
+    - name: Check line endings (Unix LF)
+      run: |
+        echo "🔍 Checking line endings..."
+        FOUND_CRLF=0
+
+        for file in Intruder/*.txt; do
+          echo "Checking $file..."
+          if file "$file" | grep -q "CRLF"; then
+            echo "❌ Found Windows line endings (CRLF) in $file"
+            FOUND_CRLF=1
+          else
+            echo "✅ Correct line endings in $file"
+          fi
+        done
+
+        if [ $FOUND_CRLF -eq 1 ]; then
+          echo "::error::Windows line endings found. Please use Unix line endings (LF)"
+          exit 1
+        fi
+
+    - name: Check for non-ASCII characters
+      run: |
+        echo "🔍 Checking for non-ASCII characters..."
+        FOUND_NON_ASCII=0
+
+        for file in Intruder/*.txt; do
+          echo "Checking $file..."
+          if grep -P '[^\x00-\x7F]' "$file"; then
+            echo "⚠️ Found non-ASCII characters in $file"
+            FOUND_NON_ASCII=1
+          else
+            echo "✅ Only ASCII characters in $file"
+          fi
+        done
+
+        if [ $FOUND_NON_ASCII -eq 1 ]; then
+          echo "::warning::Non-ASCII characters found in one or more files"
+        fi
+
+    - name: Count payloads
+      run: |
+        echo "📊 Payload Statistics:"
+        echo "====================="
+        TOTAL=0
+
+        for file in Intruder/*.txt; do
+          COUNT=$(wc -l < "$file" | tr -d ' ')
+          TOTAL=$((TOTAL + COUNT))
+          printf "%-35s %6d payloads\n" "$(basename $file)" "$COUNT"
+        done
+
+        echo "====================="
+        printf "%-35s %6d payloads\n" "TOTAL:" "$TOTAL"
+        echo ""
+        echo "Total payload count: $TOTAL" >> $GITHUB_STEP_SUMMARY
+
+    - name: Validate file structure
+      run: |
+        echo "🔍 Validating file structure..."
+
+        if [ ! -d "Intruder" ]; then
+          echo "::error::Intruder directory not found"
+          exit 1
+        fi
+
+        REQUIRED_FILES=(
+          "common-directories.txt"
+          "webserver-directories.txt"
+          "backup-sensitive.txt"
+          "cms-directories.txt"
+          "api-endpoints.txt"
+          "dev-test-directories.txt"
+          "cloud-platforms.txt"
+          "admin-panels.txt"
+          "database-directories.txt"
+          "language-framework.txt"
+          "special-encoded.txt"
+          "file-extensions.txt"
+        )
+
+        for file in "${REQUIRED_FILES[@]}"; do
+          if [ ! -f "Intruder/$file" ]; then
+            echo "::error::Required file Intruder/$file not found"
+            exit 1
+          else
+            echo "✅ Found $file"
+          fi
+        done
+
+    - name: Check file sizes
+      run: |
+        echo "📏 Checking file sizes..."
+
+        for file in Intruder/*.txt; do
+          SIZE=$(du -h "$file" | cut -f1)
+          LINES=$(wc -l < "$file" | tr -d ' ')
+          echo "$(basename $file): $SIZE ($LINES lines)"
+        done
+
+    - name: Generate summary
+      if: always()
+      run: |
+        echo "# Payload Validation Results 🎯" >> $GITHUB_STEP_SUMMARY
+        echo "" >> $GITHUB_STEP_SUMMARY
+        echo "## Files Validated" >> $GITHUB_STEP_SUMMARY
+        echo "" >> $GITHUB_STEP_SUMMARY
+        echo "| File | Lines | Status |" >> $GITHUB_STEP_SUMMARY
+        echo "|------|-------|--------|" >> $GITHUB_STEP_SUMMARY
+
+        for file in Intruder/*.txt; do
+          COUNT=$(wc -l < "$file" | tr -d ' ')
+          NAME=$(basename "$file")
+          echo "| $NAME | $COUNT | ✅ |" >> $GITHUB_STEP_SUMMARY
+        done
+
+        echo "" >> $GITHUB_STEP_SUMMARY
+        echo "✨ All validations completed!" >> $GITHUB_STEP_SUMMARY
+
+  security-scan:
+    runs-on: ubuntu-latest
+
+    steps:
+    - name: Checkout repository
+      uses: actions/checkout@v4
+
+    - name: Check for sensitive data
+      run: |
+        echo "🔒 Scanning for sensitive data patterns..."
+        FOUND_SENSITIVE=0
+
+        # Patterns to avoid in payload files
+        PATTERNS=(
+          "password.*=.*[^a-zA-Z0-9]"
+          "api[_-]?key.*=.*[a-zA-Z0-9]{20,}"
+          "secret.*=.*[a-zA-Z0-9]{20,}"
+          "token.*=.*[a-zA-Z0-9]{20,}"
+        )
+
+        for file in Intruder/*.txt; do
+          for pattern in "${PATTERNS[@]}"; do
+            if grep -iE "$pattern" "$file"; then
+              echo "⚠️ Potential sensitive data found in $file"
+              FOUND_SENSITIVE=1
+            fi
+          done
+        done
+
+        if [ $FOUND_SENSITIVE -eq 0 ]; then
+          echo "✅ No sensitive data patterns detected"
+        else
+          echo "::warning::Potential sensitive data found. Please review."
+        fi
